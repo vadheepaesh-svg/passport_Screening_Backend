@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Document Screening — Local Test</title>
+<style>
+  :root {
+    --navy: #1e2a4a;
+    --slate: #3d4a6b;
+    --bg: #f4f6fa;
+    --green: #1a7f37;
+    --amber: #b58900;
+    --red: #c0392b;
+    --border: #d8dde6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    background: var(--bg);
+    margin: 0;
+    padding: 32px 16px;
+    color: #1c2230;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; }
+  h1 {
+    font-size: 22px;
+    color: var(--navy);
+    margin-bottom: 4px;
+  }
+  .subtitle {
+    color: #5a6478;
+    font-size: 14px;
+    margin-bottom: 24px;
+  }
+  .card {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    margin-bottom: 20px;
+  }
+  label {
+    display: block;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--navy);
+    margin-bottom: 6px;
+    margin-top: 16px;
+  }
+  label:first-child { margin-top: 0; }
+  input[type="file"], select, input[type="text"] {
+    width: 100%;
+    padding: 9px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 14px;
+    background: #fafbfc;
+  }
+  #apiUrl { font-family: monospace; }
+  button {
+    background: var(--navy);
+    color: white;
+    border: none;
+    padding: 11px 22px;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 20px;
+  }
+  button:hover { background: var(--slate); }
+  button:disabled { background: #9aa3b5; cursor: not-allowed; }
+  .status {
+    font-size: 13px;
+    margin-top: 12px;
+    color: #5a6478;
+  }
+  .status.error { color: var(--red); font-weight: 600; }
+
+  .score-box {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 18px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+  }
+  .score-box.low { background: #e8f5ea; border: 1px solid var(--green); }
+  .score-box.medium { background: #fdf3d9; border: 1px solid var(--amber); }
+  .score-box.high { background: #fbe9e7; border: 1px solid var(--red); }
+  .score-number { font-size: 42px; font-weight: 700; line-height: 1; }
+  .score-label { font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+
+  .module {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    overflow: hidden;
+  }
+  .module summary {
+    padding: 12px 16px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 14px;
+    background: #f7f8fb;
+    display: flex;
+    justify-content: space-between;
+  }
+  .module-score { color: var(--slate); font-weight: 500; }
+  .module-body { padding: 14px 16px; font-size: 13px; }
+  .module-body table { width: 100%; border-collapse: collapse; }
+  .module-body td { padding: 4px 0; border-bottom: 1px solid #eef0f4; }
+  .module-body td:first-child { color: #5a6478; width: 40%; }
+  ul.flags { margin: 0; padding-left: 18px; }
+  ul.flags li { margin-bottom: 4px; }
+
+  .raw-json {
+    background: #1c2230;
+    color: #c8d1e0;
+    padding: 14px;
+    border-radius: 8px;
+    font-family: monospace;
+    font-size: 12px;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Document Screening — Local Test</h1>
+  <div class="subtitle">Temporary local frontend to test your FastAPI backend before deploying.</div>
+
+  <div class="card">
+    <label for="apiUrl">Backend API URL</label>
+    <input type="text" id="apiUrl" value="http://localhost:8000">
+
+    <label for="docType">Document Type</label>
+    <select id="docType">
+      <option value="passport">Passport</option>
+      <option value="visa">Visa</option>
+      <option value="national_id">National ID</option>
+      <option value="driving_license">Driving License</option>
+      <option value="permit">Permit</option>
+    </select>
+
+    <label for="fileInput">Document Image</label>
+    <input type="file" id="fileInput" accept=".jpg,.jpeg,.png">
+
+    <button id="submitBtn">Run Screening</button>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div id="results"></div>
+
+</div>
+
+<script>
+  const submitBtn = document.getElementById("submitBtn");
+  const statusEl = document.getElementById("status");
+  const resultsEl = document.getElementById("results");
+  const fileInput = document.getElementById("fileInput");
+  const apiUrlInput = document.getElementById("apiUrl");
+
+  function riskBand(score) {
+    if (score >= 70) return { label: "High Risk", cls: "high" };
+    if (score >= 35) return { label: "Medium Risk", cls: "medium" };
+    return { label: "Low Risk", cls: "low" };
+  }
+
+  function renderTable(obj) {
+    if (!obj || typeof obj !== "object") return "<p>No data.</p>";
+    let rows = Object.entries(obj)
+      .map(([k, v]) => `<tr><td>${k}</td><td>${v === null || v === undefined ? "—" : v}</td></tr>`)
+      .join("");
+    return `<table>${rows}</table>`;
+  }
+
+  function renderFlags(flags) {
+    if (!flags || !flags.length) return "<p>No flags.</p>";
+    return `<ul class="flags">${flags.map(f => `<li>${f}</li>`).join("")}</ul>`;
+  }
+
+  function renderResults(data) {
+    const finalScore = data.final_risk_score ?? 0;
+    const band = riskBand(finalScore);
+
+    const extraction = data.module1_extraction || {};
+    const fields = extraction.extracted_fields || {};
+    const mrzRisk = data.module2_mrz_risk || {};
+    const tampering = data.module3_tampering || {};
+    const physical = data.module3_physical_consistency || {};
+
+    resultsEl.innerHTML = `
+      <div class="card">
+        <div class="score-box ${band.cls}">
+          <div class="score-number">${finalScore}</div>
+          <div>
+            <div class="score-label">${band.label}</div>
+            <div style="font-size:13px;color:#5a6478;">Final combined risk score / 100</div>
+          </div>
+        </div>
+
+        <details class="module" open>
+          <summary>Module 1 — Extracted Fields <span class="module-score">${extraction.success ? "OK" : "FAILED"}</span></summary>
+          <div class="module-body">
+            ${extraction.success ? renderTable(fields) : `<p style="color:#c0392b;">${extraction.error || "No MRZ detected"}</p>`}
+          </div>
+        </details>
+
+        <details class="module">
+          <summary>Module 2 — Document Validation <span class="module-score">${mrzRisk.risk_contribution ?? "—"} / 100</span></summary>
+          <div class="module-body">${renderFlags(mrzRisk.flags)}</div>
+        </details>
+
+        <details class="module">
+          <summary>Module 3 — Tampering Detection <span class="module-score">${tampering.tampering_score ?? "—"} / 100</span></summary>
+          <div class="module-body">${renderFlags(tampering.flags)}</div>
+        </details>
+
+        <details class="module">
+          <summary>Module 3 (Bonus) — Physical Consistency <span class="module-score">${physical.physical_score ?? "—"} / 100</span></summary>
+          <div class="module-body">${renderFlags(physical.flags)}</div>
+        </details>
+
+        <details class="module">
+          <summary>Raw JSON Response</summary>
+          <div class="module-body"><pre class="raw-json">${JSON.stringify(data, null, 2)}</pre></div>
+        </details>
+      </div>
+    `;
+  }
+
+  submitBtn.addEventListener("click", async () => {
+    const file = fileInput.files[0];
+    if (!file) {
+      statusEl.textContent = "Please select a document image first.";
+      statusEl.className = "status error";
+      return;
+    }
+
+    const apiUrl = apiUrlInput.value.replace(/\/$/, "");
+    const formData = new FormData();
+    formData.append("file", file);
+
+    submitBtn.disabled = true;
+    statusEl.textContent = "Processing... (this calls your local FastAPI backend)";
+    statusEl.className = "status";
+    resultsEl.innerHTML = "";
+
+    try {
+      const response = await fetch(`${apiUrl}/screen-document`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server responded with status ${response.status}`);
+      }
+
+      const data = await response.json();
+
+      if (data.error) {
+        statusEl.textContent = `Backend error: ${data.error}`;
+        statusEl.className = "status error";
+      } else {
+        statusEl.textContent = "Done.";
+        renderResults(data);
+      }
+    } catch (err) {
+      statusEl.textContent =
+        "Request failed: " + err.message +
+        " — check that your backend is running (uvicorn api:app --reload) " +
+        "and that the API URL above is correct.";
+      statusEl.className = "status error";
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
