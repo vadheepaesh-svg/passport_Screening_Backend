@@ -37,7 +37,11 @@ from passporteye import read_mrz
 import pytesseract
 
 # Point pytesseract directly at the Tesseract executable (Windows fix)
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+import platform
+
+if platform.system() == "Windows":
+    pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+# On Linux (Render), pytesseract finds tesseract automatically via PATH — no override needed
 
 # pytesseract is only needed for the optional visible-name cross-check
 try:
