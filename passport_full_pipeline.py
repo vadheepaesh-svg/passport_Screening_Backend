@@ -2,7 +2,7 @@
 Passport Screening Pipeline — Module 1 + Module 2 + Module 3
 --------------------------------------------------------------
 AI-Based Fake Identity & Document Screening System
-
+ 
 This combines:
     MODULE 1 (OCR Extraction)      — reads MRZ fields via PassportEye
     MODULE 2 (Document Validation) — MRZ checksums + document logic
@@ -10,47 +10,47 @@ This combines:
     MODULE 3 (Tampering Detection) — image-level forgery detection:
                                       Error Level Analysis (ELA),
                                       Copy-Move detection, Metadata analysis
-
+ 
 Requirements (all free):
     pip install passporteye opencv-python pillow pytesseract numpy
-
+ 
 Also requires Tesseract OCR installed on your system (the actual program,
 not just the Python wrapper):
     Windows : https://github.com/UB-Mannheim/tesseract/wiki
     Mac     : brew install tesseract
     Linux   : sudo apt install tesseract-ocr
-
+ 
 HOW TO USE:
     Set IMAGE_PATH below, then run this file directly.
     No terminal arguments needed.
 """
-
+ 
 import json
 import re
 import os
 from datetime import datetime
-
+ 
 import numpy as np
 from PIL import Image, ImageChops
 import cv2
 from passporteye import read_mrz
 import pytesseract
-
+ 
 # Point pytesseract directly at the Tesseract executable (Windows fix)
 import platform
-
+ 
 if platform.system() == "Windows":
     pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 # On Linux (Render), pytesseract finds tesseract automatically via PATH — no override needed
-
+ 
 # pytesseract is only needed for the optional visible-name cross-check
 try:
     import pytesseract
     PYTESSERACT_AVAILABLE = True
 except ImportError:
     PYTESSERACT_AVAILABLE = False
-
-
+ 
+ 
 # ============================================================
 # SETTINGS YOU CONTROL
 # ============================================================
@@ -59,30 +59,27 @@ IMAGE_PATH = "C:\\Users\\DHEEPAESH VA\\OneDrive\\Desktop\\sih\\passportSample.jp
 #   Same folder as this script :  "sample_passport.jpg"
 #   Windows full path          :  r"C:\Users\YourName\Desktop\passport.jpg"
 #   Mac/Linux full path        :  "/Users/YourName/Desktop/passport.jpg"
-
+ 
 # OPTIONAL: cropped image of just the VISIBLE printed name on the photo
 # page, for cross-checking against the MRZ name. Leave None to skip.
 VISIBLE_NAME_REGION_PATH = None
-
+ 
 # OPTIONAL: restrict Module 3's ELA + copy-move checks to a specific box
 # (x, y, width, height) in pixels — e.g. the photo + text area, excluding
 # decorative security patterns near the borders that can cause false
 # positives. Leave None to analyze the whole image.
-# NOTE: this was left as None before, which meant ELA/copy-move analyzed
-# the ENTIRE image, including the busy security-pattern borders that caused
-# the earlier false-positive (2012 matches on a genuine passport). Set this
-# to a box around just the photo + printed text area on YOUR sample image
-# (excluding the decorative patterned border) — the example values below
-# are a placeholder and will need adjusting to your actual image's layout.
-ANALYSIS_REGION = (40, 60, 450, 320)
+ANALYSIS_REGION = None
 # Example: ANALYSIS_REGION = (40, 60, 450, 320)
-
+# Reverted to None — a placeholder box here caused crashes when it didn't
+# match your actual image's dimensions. Only set this once you've measured
+# real pixel coordinates from your own test image.
+ 
 # OPTIONAL: bounding box of just the FACE PHOTO region on the document,
 # as (x, y, width, height) in pixels. Needed only for the physical
 # consistency check (photo-swap detection). Leave None to skip that check.
 PHOTO_REGION = None
 # Example: PHOTO_REGION = (60, 90, 140, 170)
-
+ 
 # ---- Module 1/2 reference data ----
 VALID_DOCUMENT_TYPES = ["P", "V", "I", "A", "C"]
 VALID_COUNTRY_CODES = {
@@ -91,12 +88,12 @@ VALID_COUNTRY_CODES = {
     "UTO",
 }
 MAX_PLAUSIBLE_AGE = 110
-
+ 
 # ---- Module 3 tunable thresholds ----
 ELA_JPEG_QUALITY = 90
 ELA_SCALE_FACTOR = 15
 ELA_SUSPICION_THRESHOLD = 45
-
+ 
 # These were raised drastically (60/500) to kill a false positive on a
 # genuine passport's security-pattern border — but that overcorrected and
 # made real, localized tampering (a few dozen matches) undetectable too.
@@ -105,11 +102,11 @@ ELA_SUSPICION_THRESHOLD = 45
 # values sensitive enough to actually catch real tampering.
 COPY_MOVE_MIN_DISTANCE_PX = 40
 COPY_MOVE_MIN_MATCHES = 15
-
+ 
 METADATA_SUSPICIOUS_SOFTWARE = [
     "photoshop", "gimp", "paint.net", "pixelmator", "affinity photo",
 ]
-
+ 
 # ---- Physical consistency check thresholds (photo-swap detection) ----
 # These compare the FACE PHOTO region against the surrounding document —
 # designed to catch a PHYSICALLY swapped photo that was then photographed
@@ -117,7 +114,7 @@ METADATA_SUSPICIOUS_SOFTWARE = [
 # digital edit history in a fresh camera JPEG).
 NOISE_RATIO_SUSPICION_THRESHOLD = 1.8   # photo-region noise vs surrounding, ratio
 LIGHTING_ANGLE_SUSPICION_DEGREES = 35   # gradient-direction mismatch, degrees
-
+ 
 # ---- Overall combined risk weighting ----
 # How much each module contributes to the FINAL combined risk score.
 # NOTE: these must sum to 1.0 — the previous values (0.5 + 0.55 + 0.5 = 1.55)
@@ -126,8 +123,8 @@ WEIGHT_MRZ_LOGIC = 0.3   # Module 1/2's checksum + logic risk
 WEIGHT_TAMPERING = 0.4   # Module 3's digital tampering score (ELA/copy-move/metadata)
 WEIGHT_PHYSICAL = 0.3    # Module 3's physical consistency score (photo-swap check)
 # ============================================================
-
-
+ 
+ 
 # ============================================================
 # MODULE 1: OCR EXTRACTION (PassportEye + Tesseract)
 # ============================================================
@@ -137,25 +134,25 @@ def extract_mrz_data(image_path: str) -> dict:
     dictionary of extracted + checksum-validated MRZ fields.
     """
     mrz = read_mrz(image_path)
-
+ 
     if mrz is None:
         return {
             "success": False,
             "error": "No MRZ detected in the image. Check image quality, "
                      "cropping, or lighting.",
         }
-
+ 
     data = mrz.to_dict()
-
+ 
     def format_mrz_date(raw_date):
         try:
             return datetime.strptime(raw_date, "%y%m%d").strftime("%d-%m-%Y")
         except (ValueError, TypeError):
             return None
-
+ 
     raw_text = data.get("raw_text", "") or ""
     raw_lines = raw_text.split("\n")
-
+ 
     return {
         "success": True,
         "raw_mrz_lines": {
@@ -183,8 +180,8 @@ def extract_mrz_data(image_path: str) -> dict:
             "overall_mrz_confidence": data.get("valid_score"),
         },
     }
-
-
+ 
+ 
 def extract_visible_name(image_path: str):
     """Direct Tesseract OCR (not via PassportEye) on a cropped visible-name image."""
     if not PYTESSERACT_AVAILABLE or not image_path:
@@ -196,8 +193,8 @@ def extract_visible_name(image_path: str):
         return cleaned if cleaned else None
     except Exception:
         return None
-
-
+ 
+ 
 # ============================================================
 # MODULE 2: DOCUMENT VALIDATION (checksum + logic checks)
 # ============================================================
@@ -209,12 +206,12 @@ def compute_mrz_risk(result: dict, visible_name_path: str = None) -> dict:
     """
     if not result.get("success"):
         return {"risk_contribution": 100, "flags": ["MRZ not readable at all"]}
-
+ 
     checks = result["checksum_validation"]
     fields = result["extracted_fields"]
     flags = []
     penalty = 0
-
+ 
     if checks.get("passport_number_valid") is False:
         flags.append("Passport number checksum failed — possible tampering")
         penalty += 30
@@ -231,12 +228,12 @@ def compute_mrz_risk(result: dict, visible_name_path: str = None) -> dict:
     if confidence is not None and confidence < 70:
         flags.append(f"Low overall MRZ OCR confidence ({confidence})")
         penalty += (70 - confidence) * 0.5
-
+ 
     doc_type = fields.get("document_type")
     if doc_type and doc_type not in VALID_DOCUMENT_TYPES:
         flags.append(f"Unrecognized document type code: '{doc_type}'")
         penalty += 20
-
+ 
     expiry_raw = fields.get("date_of_expiry")
     if expiry_raw:
         try:
@@ -246,7 +243,7 @@ def compute_mrz_risk(result: dict, visible_name_path: str = None) -> dict:
                 penalty += 35
         except ValueError:
             pass
-
+ 
     issuing_country = fields.get("issuing_country")
     nationality = fields.get("nationality")
     for label, code in [("Issuing country", issuing_country),
@@ -254,7 +251,7 @@ def compute_mrz_risk(result: dict, visible_name_path: str = None) -> dict:
         if code and code not in VALID_COUNTRY_CODES:
             flags.append(f"{label} code '{code}' not recognized/invalid")
             penalty += 15
-
+ 
     dob_raw = fields.get("date_of_birth")
     if dob_raw:
         try:
@@ -268,13 +265,13 @@ def compute_mrz_risk(result: dict, visible_name_path: str = None) -> dict:
                 penalty += 30
         except ValueError:
             pass
-
+ 
     if visible_name_path:
         visible_name = extract_visible_name(visible_name_path)
         mrz_name = f"{fields.get('surname', '')} {fields.get('given_names', '')}"
         mrz_name_clean = re.sub(r"[^A-Za-z\s]", "", mrz_name).strip().upper()
         mrz_name_clean = re.sub(r"\s+", " ", mrz_name_clean)
-
+ 
         if visible_name is None:
             flags.append("Visible name region unreadable — cross-check skipped")
         else:
@@ -288,14 +285,14 @@ def compute_mrz_risk(result: dict, visible_name_path: str = None) -> dict:
                     f"MRZ name ('{mrz_name_clean}') — possible photo page tampering"
                 )
                 penalty += 35
-
+ 
     penalty = min(penalty, 100)
     return {
         "risk_contribution": round(penalty, 2),
         "flags": flags if flags else ["No checksum or logic anomalies detected"],
     }
-
-
+ 
+ 
 # ============================================================
 # MODULE 3: TAMPERING DETECTION (image-level)
 # ============================================================
@@ -306,8 +303,8 @@ def crop_to_region(image, region):
     if isinstance(image, Image.Image):
         return image.crop((x, y, x + w, y + h))
     return image[y:y + h, x:x + w]
-
-
+ 
+ 
 def run_ela(image_path: str, quality: int = ELA_JPEG_QUALITY,
             scale: int = ELA_SCALE_FACTOR, region=None):
     """
@@ -317,30 +314,30 @@ def run_ela(image_path: str, quality: int = ELA_JPEG_QUALITY,
     """
     original = Image.open(image_path).convert("RGB")
     original = crop_to_region(original, region)
-
+ 
     temp_path = image_path.rsplit(".", 1)[0] + "_ela_temp.jpg"
     original.save(temp_path, "JPEG", quality=quality)
     recompressed = Image.open(temp_path)
-
+ 
     diff = ImageChops.difference(original, recompressed)
     diff_np = np.array(diff).astype(np.float32) * scale
     diff_np = np.clip(diff_np, 0, 255).astype(np.uint8)
     ela_image = Image.fromarray(diff_np)
-
+ 
     gray = np.array(ela_image.convert("L")).astype(np.float32)
     mean_brightness = float(gray.mean())
     max_brightness = float(gray.max())
-
+ 
     os.remove(temp_path)
     return ela_image, mean_brightness, max_brightness
-
-
+ 
+ 
 def evaluate_ela(image_path: str, region=None) -> dict:
     ela_image, mean_b, max_b = run_ela(image_path, region=region)
-
+ 
     output_path = image_path.rsplit(".", 1)[0] + "_ela.jpg"
     ela_image.save(output_path, "JPEG")
-
+ 
     suspicious = mean_b > ELA_SUSPICION_THRESHOLD
     return {
         "ela_heatmap_path": output_path,
@@ -354,8 +351,8 @@ def evaluate_ela(image_path: str, region=None) -> dict:
             "ELA brightness within normal range"
         ),
     }
-
-
+ 
+ 
 def detect_copy_move(image_path: str, region=None) -> dict:
     """
     ORB keypoint detection + brute-force matching to find near-identical
@@ -366,19 +363,19 @@ def detect_copy_move(image_path: str, region=None) -> dict:
     if img is None:
         return {"suspicious": False, "num_matches": 0,
                 "note": "Could not load image for copy-move analysis"}
-
+ 
     img = crop_to_region(img, region)
-
+ 
     orb = cv2.ORB_create(nfeatures=2000)
     keypoints, descriptors = orb.detectAndCompute(img, None)
-
+ 
     if descriptors is None or len(keypoints) < 10:
         return {"suspicious": False, "num_matches": 0,
                 "note": "Not enough distinct features found for copy-move analysis"}
-
+ 
     bf = cv2.BFMatcher(cv2.NORM_HAMMING)
     matches = bf.knnMatch(descriptors, descriptors, k=3)
-
+ 
     suspicious_matches = []
     for match_group in matches:
         for m in match_group[1:]:  # skip index 0 = self-match
@@ -388,7 +385,7 @@ def detect_copy_move(image_path: str, region=None) -> dict:
                 spatial_dist = np.linalg.norm(np.array(pt1) - np.array(pt2))
                 if spatial_dist > COPY_MOVE_MIN_DISTANCE_PX:
                     suspicious_matches.append((pt1, pt2, float(m.distance)))
-
+ 
     num_matches = len(suspicious_matches)
     suspicious = num_matches >= COPY_MOVE_MIN_MATCHES
     return {
@@ -402,13 +399,13 @@ def detect_copy_move(image_path: str, region=None) -> dict:
             f"Only {num_matches} weak duplicate signals — likely not copy-move forgery"
         ),
     }
-
-
+ 
+ 
 def analyze_metadata(image_path: str) -> dict:
     """Reads EXIF metadata and flags editing-software traces or timestamp mismatches."""
     flags = []
     exif_data = {}
-
+ 
     try:
         img = Image.open(image_path)
         raw_exif = img._getexif()
@@ -419,7 +416,7 @@ def analyze_metadata(image_path: str) -> dict:
                 exif_data[str(tag_name)] = str(value)
     except Exception:
         pass
-
+ 
     if not exif_data:
         flags.append(
             "No EXIF metadata found — could indicate a screenshot, "
@@ -431,7 +428,7 @@ def analyze_metadata(image_path: str) -> dict:
             if tool in software:
                 flags.append(f"Image metadata shows editing software used: '{exif_data.get('Software')}'")
                 break
-
+ 
         date_original = exif_data.get("DateTimeOriginal")
         date_modified = exif_data.get("DateTime")
         if date_original and date_modified and date_original != date_modified:
@@ -439,32 +436,32 @@ def analyze_metadata(image_path: str) -> dict:
                 f"Creation timestamp ({date_original}) differs from modified "
                 f"timestamp ({date_modified}) — image was edited after capture"
             )
-
+ 
     return {
         "exif_present": bool(exif_data),
         "flags": flags if flags else ["No suspicious metadata signals found"],
         "raw_fields_found": list(exif_data.keys()),
     }
-
-
+ 
+ 
 def compute_module3_score(image_path: str, region=None) -> dict:
     """Combines ELA + copy-move + metadata into one image-tampering score."""
     ela_result = evaluate_ela(image_path, region=region)
     copy_move_result = detect_copy_move(image_path, region=region)
     metadata_result = analyze_metadata(image_path)
-
+ 
     flags = []
     penalty = 0
-
+ 
     if ela_result["suspicious"]:
         flags.append(ela_result["note"])
         excess = ela_result["mean_brightness"] - ELA_SUSPICION_THRESHOLD
         penalty += min(40, 20 + excess * 0.5)
-
+ 
     if copy_move_result["suspicious"]:
         flags.append(copy_move_result["note"])
         penalty += min(40, 15 + copy_move_result["num_matches"])
-
+ 
     real_metadata_flags = [
         f for f in metadata_result["flags"]
         if f != "No suspicious metadata signals found"
@@ -472,15 +469,15 @@ def compute_module3_score(image_path: str, region=None) -> dict:
     if real_metadata_flags:
         flags.extend(real_metadata_flags)
         penalty += min(15, len(real_metadata_flags) * 8)
-
+ 
     penalty = min(round(penalty, 2), 100)
     return {
         "tampering_score": penalty,
         "flags": flags if flags else ["No tampering indicators detected"],
         "details": {"ela": ela_result, "copy_move": copy_move_result, "metadata": metadata_result},
     }
-
-
+ 
+ 
 # ============================================================
 # MODULE 3 (BONUS): PHYSICAL CONSISTENCY CHECK — PHOTO-SWAP DETECTION
 # ============================================================
@@ -522,30 +519,30 @@ def compute_noise_consistency(image_path: str, photo_region) -> dict:
     img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         return {"suspicious": False, "note": "Could not load image"}
-
+ 
     x, y, w, h = photo_region
     photo_crop = img[y:y + h, x:x + w]
-
+ 
     # "Surrounding" = whole image with the photo region blanked out,
     # so we're comparing texture against the rest of the document only.
     surrounding = img.copy()
     surrounding[y:y + h, x:x + w] = 0
-
+ 
     # Laplacian variance is a standard proxy for high-frequency texture/
     # noise: a sharper, higher-frequency printed surface produces a
     # higher variance; a smoother/flatter surface produces a lower one.
     photo_noise = cv2.Laplacian(photo_crop, cv2.CV_64F).var()
     surrounding_noise = cv2.Laplacian(surrounding, cv2.CV_64F).var()
-
+ 
     if surrounding_noise == 0:
         ratio = 1.0
     else:
         ratio = photo_noise / surrounding_noise
-
+ 
     suspicious = (ratio > NOISE_RATIO_SUSPICION_THRESHOLD) or (
         ratio < 1 / NOISE_RATIO_SUSPICION_THRESHOLD
     )
-
+ 
     return {
         "suspicious": suspicious,
         "photo_region_noise": round(float(photo_noise), 2),
@@ -558,8 +555,8 @@ def compute_noise_consistency(image_path: str, photo_region) -> dict:
             "Photo region texture consistent with surrounding document"
         ),
     }
-
-
+ 
+ 
 def compute_lighting_consistency(image_path: str, photo_region) -> dict:
     """
     Compares the average brightness-gradient DIRECTION inside the photo
@@ -572,13 +569,13 @@ def compute_lighting_consistency(image_path: str, photo_region) -> dict:
     img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         return {"suspicious": False, "note": "Could not load image"}
-
+ 
     x, y, w, h = photo_region
     photo_crop = img[y:y + h, x:x + w].astype(np.float32)
-
+ 
     surrounding = img.copy().astype(np.float32)
     surrounding[y:y + h, x:x + w] = np.nan  # mark photo area to exclude from mean
-
+ 
     def mean_gradient_angle(patch):
         gx = cv2.Sobel(patch, cv2.CV_32F, 1, 0, ksize=3)
         gy = cv2.Sobel(patch, cv2.CV_32F, 0, 1, ksize=3)
@@ -591,18 +588,18 @@ def compute_lighting_consistency(image_path: str, photo_region) -> dict:
         angles = np.arctan2(gy[mask], gx[mask])
         mean_angle = np.arctan2(np.nanmean(np.sin(angles)), np.nanmean(np.cos(angles)))
         return np.degrees(mean_angle)
-
+ 
     photo_angle = mean_gradient_angle(photo_crop)
-
+ 
     # For the surrounding area, compute gradients ignoring the NaN hole
     surrounding_filled = np.nan_to_num(surrounding, nan=float(np.nanmean(surrounding)))
     surrounding_angle = mean_gradient_angle(surrounding_filled)
-
+ 
     angle_diff = abs(photo_angle - surrounding_angle)
     angle_diff = min(angle_diff, 360 - angle_diff)  # wrap-around
-
+ 
     suspicious = angle_diff > LIGHTING_ANGLE_SUSPICION_DEGREES
-
+ 
     return {
         "suspicious": suspicious,
         "photo_region_angle_deg": round(float(photo_angle), 1),
@@ -615,8 +612,8 @@ def compute_lighting_consistency(image_path: str, photo_region) -> dict:
             "Lighting direction in photo region consistent with surrounding document"
         ),
     }
-
-
+ 
+ 
 def compute_physical_consistency_score(image_path: str, photo_region=None) -> dict:
     """
     Combines noise consistency + lighting consistency into one physical
@@ -629,34 +626,34 @@ def compute_physical_consistency_score(image_path: str, photo_region=None) -> di
             "flags": ["PHOTO_REGION not set — physical consistency check skipped"],
             "details": None,
         }
-
+ 
     noise_result = compute_noise_consistency(image_path, photo_region)
     lighting_result = compute_lighting_consistency(image_path, photo_region)
-
+ 
     flags = []
     penalty = 0
-
+ 
     if noise_result["suspicious"]:
         flags.append(noise_result["note"])
         penalty += 60
-
+ 
     if lighting_result["suspicious"]:
         flags.append(lighting_result["note"])
         penalty += 60
-
+ 
     # BUG FIX: this was `max(penalty, 200)`, which forced physical_score to
     # ALWAYS be at least 200 whenever PHOTO_REGION was set — regardless of
     # whether anything suspicious was actually found. Correct behavior is
     # to cap the score at 100, not force a minimum of 200.
     penalty = min(penalty, 100)
-
+ 
     return {
         "physical_score": penalty,
         "flags": flags if flags else ["No physical photo-swap indicators detected"],
         "details": {"noise": noise_result, "lighting": lighting_result},
     }
-
-
+ 
+ 
 # ============================================================
 # COMBINE ALL MODULES INTO ONE FINAL RISK SCORE
 # ============================================================
@@ -666,7 +663,7 @@ def run_full_pipeline(image_path: str, visible_name_path: str = None,
     mrz_risk = compute_mrz_risk(extraction, visible_name_path)
     tampering = compute_module3_score(image_path, region=analysis_region)
     physical = compute_physical_consistency_score(image_path, photo_region=photo_region)
-
+ 
     # If the physical consistency check was SKIPPED (no PHOTO_REGION set),
     # its score of 0 means "not checked," not "no risk found" — including
     # it at full weight would unfairly drag the final score down. Instead,
@@ -674,7 +671,7 @@ def run_full_pipeline(image_path: str, visible_name_path: str = None,
     # actually ran, so a skipped check has no effect on the final score
     # either way.
     physical_was_skipped = physical["details"] is None
-
+ 
     if physical_was_skipped:
         remaining_weight = WEIGHT_MRZ_LOGIC + WEIGHT_TAMPERING
         w_mrz = WEIGHT_MRZ_LOGIC / remaining_weight
@@ -684,14 +681,14 @@ def run_full_pipeline(image_path: str, visible_name_path: str = None,
         w_mrz = WEIGHT_MRZ_LOGIC
         w_tampering = WEIGHT_TAMPERING
         w_physical = WEIGHT_PHYSICAL
-
+ 
     final_score = round(
         mrz_risk["risk_contribution"] * w_mrz
         + tampering["tampering_score"] * w_tampering
         + physical["physical_score"] * w_physical,
         2,
     )
-
+ 
     return {
         "final_risk_score": final_score,
         "module1_extraction": extraction,
@@ -699,18 +696,18 @@ def run_full_pipeline(image_path: str, visible_name_path: str = None,
         "module3_tampering": tampering,
         "module3_physical_consistency": physical,
     }
-
-
+ 
+ 
 def main():
     print(f"\nProcessing: {IMAGE_PATH}\n{'=' * 60}")
-
+ 
     result = run_full_pipeline(
         IMAGE_PATH,
         visible_name_path=VISIBLE_NAME_REGION_PATH,
         analysis_region=ANALYSIS_REGION,
         photo_region=PHOTO_REGION,
     )
-
+ 
     extraction = result["module1_extraction"]
     if extraction["success"]:
         print("\nMODULE 1 — EXTRACTED FIELDS:")
@@ -718,31 +715,32 @@ def main():
             print(f"  {k:20s}: {v}")
     else:
         print(f"\nMODULE 1 FAILED: {extraction['error']}")
-
+ 
     print("\nMODULE 2 — MRZ / LOGIC RISK:")
     print(f"  Risk contribution: {result['module2_mrz_risk']['risk_contribution']} / 100")
     for f in result["module2_mrz_risk"]["flags"]:
         print(f"  - {f}")
-
+ 
     print("\nMODULE 3 — IMAGE TAMPERING RISK (digital edits):")
     print(f"  Tampering score: {result['module3_tampering']['tampering_score']} / 100")
     for f in result["module3_tampering"]["flags"]:
         print(f"  - {f}")
-
+ 
     print("\nMODULE 3 (BONUS) — PHYSICAL CONSISTENCY (photo-swap check):")
     print(f"  Physical score: {result['module3_physical_consistency']['physical_score']} / 100")
     for f in result["module3_physical_consistency"]["flags"]:
         print(f"  - {f}")
-
+ 
     print(f"\n{'=' * 60}")
     print(f"FINAL COMBINED RISK SCORE: {result['final_risk_score']} / 100")
     print(f"{'=' * 60}")
-
+ 
     output_path = IMAGE_PATH.rsplit(".", 1)[0] + "_full_result.json"
     with open(output_path, "w") as f:
         json.dump(result, f, indent=2, default=str)
     print(f"\nFull result saved to: {output_path}")
-
-
+ 
+ 
 if __name__ == "__main__":
     main()
+ 
