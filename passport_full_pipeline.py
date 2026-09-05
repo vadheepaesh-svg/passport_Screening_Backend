@@ -667,10 +667,28 @@ def run_full_pipeline(image_path: str, visible_name_path: str = None,
     tampering = compute_module3_score(image_path, region=analysis_region)
     physical = compute_physical_consistency_score(image_path, photo_region=photo_region)
 
+    # If the physical consistency check was SKIPPED (no PHOTO_REGION set),
+    # its score of 0 means "not checked," not "no risk found" — including
+    # it at full weight would unfairly drag the final score down. Instead,
+    # redistribute its weight proportionally across the checks that
+    # actually ran, so a skipped check has no effect on the final score
+    # either way.
+    physical_was_skipped = physical["details"] is None
+
+    if physical_was_skipped:
+        remaining_weight = WEIGHT_MRZ_LOGIC + WEIGHT_TAMPERING
+        w_mrz = WEIGHT_MRZ_LOGIC / remaining_weight
+        w_tampering = WEIGHT_TAMPERING / remaining_weight
+        w_physical = 0
+    else:
+        w_mrz = WEIGHT_MRZ_LOGIC
+        w_tampering = WEIGHT_TAMPERING
+        w_physical = WEIGHT_PHYSICAL
+
     final_score = round(
-        mrz_risk["risk_contribution"] * WEIGHT_MRZ_LOGIC
-        + tampering["tampering_score"] * WEIGHT_TAMPERING
-        + physical["physical_score"] * WEIGHT_PHYSICAL,
+        mrz_risk["risk_contribution"] * w_mrz
+        + tampering["tampering_score"] * w_tampering
+        + physical["physical_score"] * w_physical,
         2,
     )
 
@@ -728,4 +746,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
